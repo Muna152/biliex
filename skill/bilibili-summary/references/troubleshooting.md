@@ -17,7 +17,7 @@
 显式指定解释器：
 
 ```bat
-setx BILIEX_PYTHON "E:\.dsh\dsh-runtimes\dsh-primary-runtime\dependencies\python\python.exe"
+setx BILIEX_PYTHON "C:\Python312\python.exe"
 ```
 
 绕过启动器直接用解释器（最稳的兜底）：

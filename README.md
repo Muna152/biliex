@@ -32,6 +32,15 @@
 
 **零第三方依赖**，只用 Python 标准库。要求 Python ≥ 3.10。
 
+先把代码取到本地：
+
+```bat
+git clone https://github.com/Muna152/biliex.git
+cd biliex
+```
+
+下文的 `<仓库目录>` 指的就是这个含 `.git` 的目录，换成你自己的实际路径即可。
+
 启动器 `biliex.cmd` 会**自动找 Python**，通常什么都不用配。解析顺序（命中即停）：
 
 1. 当前进程环境变量 `BILIEX_PYTHON`
@@ -43,17 +52,17 @@
 > 第 2 条是必需的：`setx` **只对新开的进程生效**。若在同一个窗口里刚 `setx` 就运行启动器，
 > 进程环境里读不到，会误报 `Python not found`。直接读注册表就绕过了这个坑。
 
-只有在自动探测选错解释器时，才需要显式指定：
+只有在自动探测选错解释器时，才需要显式指定（路径换成你自己的解释器）：
 
 ```bat
-setx BILIEX_PYTHON "E:\.dsh\dsh-runtimes\dsh-primary-runtime\dependencies\python\python.exe"
+setx BILIEX_PYTHON "C:\Python312\python.exe"
 ```
 
 **然后新开一个终端**再验证（`setx` 写的是用户环境变量，已被缓存的进程读不到；
 不过启动器会读注册表，所以同窗口重试通常也能用）：
 
 ```bat
-cd /d F:\dev\Projects\bilibiliEX
+cd /d <仓库目录>
 biliex.cmd --version
 ```
 
@@ -62,8 +71,9 @@ biliex.cmd --version
 > `biliex.cmd` **刻意保持纯 ASCII** —— `cmd.exe` 按 OEM 代码页（简中为 GBK）解码 `.cmd`，
 > 里面的中文会被解成乱码并直接破坏批处理语法（这一点是实测踩出来的）。
 >
-> 本机已确认可用的解释器：DSH 运行时自带的 Python，以及系统自带的
-> `%LOCALAPPDATA%\Python\pythoncore-3.14-64\python.exe`（3.14.3，OpenSSL 3.0.18，实测联网正常）。
+> 作者本机实测可用：系统自带的
+> `%LOCALAPPDATA%\Python\pythoncore-3.14-64\python.exe`（3.14.3，OpenSSL 3.0.18，实测联网正常），
+> 以及一个 agent 工具链自带的 Python。
 
 ---
 
@@ -141,14 +151,16 @@ biliex.cmd fetch https://b23.tv/xxxxxxx
 建议装在**独立虚拟环境**里，再让启动器指向它的解释器 —— 这样不会污染系统 Python：
 
 ```powershell
-cd F:\dev\Projects\bilibiliEX
+cd <仓库目录>
 python -m venv .venv-asr
 .\.venv-asr\Scripts\python.exe -m pip install faster-whisper
 # 或者在本仓库里直接： .\.venv-asr\Scripts\python.exe -m pip install -e ".[asr]"
 
 # 要用 GPU 再加一层（约 1.37 GB，纯 CPU 用户不需要）：见「GPU 与性能」
 .\.venv-asr\Scripts\python.exe -m pip install -e ".[asr-gpu]"
-setx BILIEX_PYTHON "F:\dev\Projects\bilibiliEX\.venv-asr\Scripts\python.exe"
+
+# 让启动器指向刚建好的虚拟环境（$PWD 即当前目录，所以要先 cd 到仓库根）
+setx BILIEX_PYTHON "$PWD\.venv-asr\Scripts\python.exe"
 ```
 
 > 国内装上面这些包请配镜像源。`pypi.org` 直连实测只有 **0.01 MB/s**；
@@ -309,7 +321,8 @@ L3 的三条完整性判据（与 L2 的「三重校验」对应）：
 源在仓库里，安装到共享根（改完源后重新执行一次即可同步）：
 
 ```powershell
-$src = 'F:\dev\Projects\bilibiliEX\skill\bilibili-summary'
+# 在仓库根目录执行
+$src = Join-Path $PWD 'skill\bilibili-summary'
 $dst = Join-Path $env:USERPROFILE '.agents\skills\bilibili-summary'
 New-Item -ItemType Directory -Force -Path $dst | Out-Null
 Copy-Item "$src\*" $dst -Recurse -Force

@@ -1,0 +1,59 @@
+[project]
+name = "biliex"
+version = "0.2.0"
+description = "B 站视频内容提取器：取官方 AI 总结与字幕，产出带时间戳的结构化内容包供 agent 总结"
+requires-python = ">=3.10"
+# 许可：MIT（见 LICENSE）。用 SPDX 表达式 + license-files，属于 PEP 639 的写法，
+# 所以 build-system 要求 setuptools>=77（更老的版本不认字符串形式的 license）。
+# ⚠️ 用了 SPDX 表达式之后**不能再写 `License ::` 分类器** —— setuptools 会直接报
+#    InvalidConfigError（实测：这是构建时才暴露的，不是写的时候）。
+license = "MIT"
+license-files = ["LICENSE"]
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "Topic :: Multimedia :: Video",
+    "Topic :: Text Processing :: Linguistic",
+]
+# 刻意零第三方依赖：L1/L2/L4 全部用标准库实现，避免在受限环境里安装依赖。
+dependencies = []
+
+[project.urls]
+Homepage = "https://github.com/Muna152/biliex"
+Source = "https://github.com/Muna152/biliex"
+
+[project.optional-dependencies]
+# 可选组件：本地 ASR（L3）。**不装也完全不影响 L1/L2/L4** —— asr.py 是惰性导入的。
+# 装上之后 `biliex fetch --asr on <BV号>` 就能对无字幕视频做本地转写。
+# 注意：模型权重（默认 large-v3-turbo，约 1.6 GB）在首次使用时才下载（默认走 ModelScope）。
+#
+# 为什么要卡 `av<19`：faster-whisper 1.2 解码时仍传 `metadata_errors`，而 PyAV 19 去掉了
+# 这个参数 —— 装上 av 19 会在**解码音频**时抛 TypeError。而 faster-whisper 自己只声明
+# `av>=11`（无上界），所以必须由我们这边兜住（实测 faster-whisper 1.2.1 + av 19.0.1 复现）。
+asr = ["faster-whisper>=1.1", "av>=12,<19"]
+
+# GPU 加速是**再上一层**的可选项，刻意不并进 `asr` —— 这两个轮子加起来约 1.3 GB，
+# 纯 CPU 用户不该替它买单。
+#
+# 为什么是这两个：ctranslate2 4.8.2 的 Windows 轮子里写死了加载 `cublas64_12.dll`
+# （CUDA 12，用纯标准库解析该轮子的 PE 导入表读出来的），而它自带的
+# `ctranslate2/cudnn64_9.dll` 只是个转发层，会再去加载 `cudnn_{ops,cnn,adv,graph}64_9.dll`。
+# 换 CUDA 13 的 `cublas64_13.dll` 顶不上（本机另一个 Python 里装了 cu130 的 torch，
+# 实测只有 13），所以版本必须卡在 CUDA 12 + cuDNN 9。
+#
+# 装完还差一步：Windows 默认**不搜** `site-packages/nvidia/*/bin`。这一步由
+# `biliex/asr.py` 的 `ensure_cuda_dll_dirs()` 自动补齐（把它前插到 PATH ——
+# 实测只有 PATH 对 ctranslate2 内部用的 `LoadLibraryA` 有效，`os.add_dll_directory` 无效）。
+asr-gpu = [
+    "nvidia-cublas-cu12>=12,<13",
+    "nvidia-cudnn-cu12>=9,<10",
+]
+
+[project.scripts]
+biliex = "biliex.cli:main"
+
+[build-system]
+requires = ["setuptools>=77"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools]
+packages = ["biliex"]

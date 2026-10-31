@@ -16,7 +16,7 @@ from pathlib import Path
 from typing import Any
 
 from . import config
-from .errors import UpstreamChanged
+from .errors import BiliexError, UpstreamChanged
 from .http import Cookie, RetryPolicy, request_json, request_payload
 from .wbi import WbiKeys, sign_params
 
@@ -24,8 +24,11 @@ API = "https://api.bilibili.com"
 
 EP_NAV = f"{API}/x/web-interface/nav"
 EP_VIEW = f"{API}/x/web-interface/view"
-# 用非 wbi 变体：实测未签名也可通（code=0），少一层依赖就少一个失效点。
 EP_PLAYER = f"{API}/x/player/v2"
+# 字幕必须走 wbi 变体：实测同一 cid 下 `player/v2`（无签名）返回的字幕轨不带
+# `subtitle_url`，而工具继续降级抓到的却是**别的视频**的缓存字幕；`player/wbi/v2`
+# 返回正确内容。保留无签名版只作为签名失效时的兜底。
+EP_PLAYER_WBI = f"{API}/x/player/wbi/v2"
 EP_CONCLUSION = f"{API}/x/web-interface/view/conclusion/get"
 # 播放地址（L3 本地 ASR 取音频用）。非 wbi 变体实测同样免签名可通；
 # wbi 变体作为兜底 —— 上游一旦收紧，签名这条路先顶上，不至于整个 L3 失效。
@@ -92,6 +95,30 @@ class Client:
         return data
 
     def player_v2(self, bvid: str, cid: int) -> dict:
+        """播放器信息（字幕轨的来源）。
+
+        **优先走 WBI 签名版。** 实测：同一 cid 下无签名的 `player/v2` 返回的
+        字幕轨**不带 `subtitle_url`**，而工具沿着降级路径抓到的正文属于**另一个
+        视频**（典型"串号"）；`player/wbi/v2` 返回同一视频的正确字幕（同一 cid：
+        360 条、内容与标题一致）。
+
+        签名版失败（接口被撤、风控、密钥拿不到）时才退回无签名版 —— 让旧路径
+        继续可用，而不是整体失效。
+        """
+        keys: WbiKeys | None
+        try:
+            keys = self.wbi_keys()
+        except BiliexError:
+            keys = None
+        if keys is not None:
+            signed = sign_params({"bvid": bvid, "cid": cid}, keys)
+            try:
+                data = request_json(EP_PLAYER_WBI, signed, cookie=self.cookie)
+            except BiliexError:
+                data = None
+            if isinstance(data, dict):
+                _require_dict(data, "player/wbi/v2")
+                return data
         data = request_json(
             EP_PLAYER, {"bvid": bvid, "cid": cid}, cookie=self.cookie
         )

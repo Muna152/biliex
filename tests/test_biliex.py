@@ -8,9 +8,13 @@
 
 from __future__ import annotations
 
+import json
+import os
+import tempfile
 import unittest
+from unittest import mock
 
-from biliex import auth, config, target
+from biliex import auth, config, http, target
 from biliex.chunk import chunk_cues, fmt_ts, format_transcript
 from biliex.content import (
     Cue,
@@ -399,3 +403,74 @@ class TestRelevanceAgainstRealData(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestBuvidPriming(unittest.TestCase):
+    """`buvid` 兜底：机房/新 IP 上不带它会直接吃 HTTP 412。
+
+    这是实测踩出来的：`view` 连不带 Cookie 都 412，补上 buvid3/buvid4 后 200。
+    buvid 是设备标识、与账号无关，所以匿名取、单独缓存，不写进凭据文件。
+    """
+
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp()
+        self._old_home = os.environ.get("BILIEX_HOME")
+        os.environ["BILIEX_HOME"] = self.tmp
+        http._buvid_cache = None
+
+    def tearDown(self):
+        http._buvid_cache = None
+        if self._old_home is None:
+            os.environ.pop("BILIEX_HOME", None)
+        else:
+            os.environ["BILIEX_HOME"] = self._old_home
+        import shutil
+
+        shutil.rmtree(self.tmp, ignore_errors=True)
+
+    class _FakeResponse:
+        def __init__(self, payload: dict):
+            self._payload = payload
+
+        def read(self) -> bytes:
+            return json.dumps(self._payload).encode("utf-8")
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *exc):
+            return False
+
+    def test_primes_buvid_and_reuses_cache(self):
+        payload = {"code": 0, "data": {"b_3": "B3-XYZ", "b_4": "B4-ABC"}}
+        cookie = http.Cookie(sessdata="s")
+        with mock.patch.object(
+            http.urllib.request, "urlopen", return_value=self._FakeResponse(payload)
+        ):
+            out = http.ensure_buvid(cookie)
+        self.assertEqual(out.buvid3, "B3-XYZ")
+        self.assertIn("buvid4=B4-ABC", out.header())
+
+        # 第二次必须走磁盘缓存，不再联网
+        http._buvid_cache = None
+        with mock.patch.object(
+            http.urllib.request, "urlopen", side_effect=AssertionError("不应再次联网")
+        ):
+            again = http.ensure_buvid(http.Cookie(sessdata="s"))
+        self.assertEqual(again.buvid3, "B3-XYZ")
+
+    def test_failure_is_silent(self):
+        """取不到 buvid 时不能阻断请求 —— 让它少一个头即可。"""
+        with mock.patch.object(
+            http.urllib.request, "urlopen", side_effect=OSError("boom")
+        ):
+            cookie = http.ensure_buvid(http.Cookie(sessdata="s"))
+        self.assertEqual(cookie.buvid3, "")
+        self.assertIsNone(http.ensure_buvid(None))
+
+    def test_existing_buvid_is_kept(self):
+        cookie = http.Cookie(sessdata="s", buvid3="ALREADY")
+        with mock.patch.object(
+            http.urllib.request, "urlopen", side_effect=AssertionError("不应联网")
+        ):
+            self.assertEqual(http.ensure_buvid(cookie).buvid3, "ALREADY")

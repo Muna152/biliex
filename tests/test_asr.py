@@ -451,19 +451,29 @@ class TestCudaRuntimeDiscovery(unittest.TestCase):
             _cleanup_tree(self.tmp)
 
     def _fake_site_packages(self) -> Path:
+        # pip 轮子的运行时目录布局随平台不同：Windows 是 nvidia/<lib>/bin/*.dll，
+        # Linux 是 nvidia/<lib>/lib/*.so*。假轮子必须按当前平台布局，否则在 Linux 上
+        # 这条用例会因"什么都没发现"而失败 —— 而那并不代表被测代码有错。
+        if os.name == "nt":
+            subdir, wheels = "bin", {"cublas": "cublas64_12.dll", "cudnn": "cudnn_ops64_9.dll"}
+        else:
+            subdir, wheels = "lib", {"cublas": "libcublas.so.12", "cudnn": "libcudnn_ops.so.9"}
         root = self.tmp / "site-packages"
-        for lib, dll in (("cublas", "cublas64_12.dll"), ("cudnn", "cudnn_ops64_9.dll")):
-            directory = root / "nvidia" / lib / "bin"
+        for lib, dll in wheels.items():
+            directory = root / "nvidia" / lib / subdir
             directory.mkdir(parents=True, exist_ok=True)
             (directory / dll).write_bytes(b"MZ")
         return root
 
-    def test_discovers_the_bin_dirs_of_pip_wheels(self):
+    def test_discovers_the_runtime_dirs_of_pip_wheels(self):
         root = self._fake_site_packages()
         with mock.patch.object(asr, "_site_package_roots", return_value=[root]):
             dirs = asr.cuda_runtime_dirs()
+        expected_subdir = "bin" if os.name == "nt" else "lib"
         self.assertEqual(
-            [d.name for d in dirs], ["bin", "bin"], "两个轮子的 bin 目录都要被发现"
+            [d.name for d in dirs],
+            [expected_subdir, expected_subdir],
+            "两个轮子的运行时目录都要被发现",
         )
         self.assertEqual({d.parent.name for d in dirs}, {"cublas", "cudnn"})
 

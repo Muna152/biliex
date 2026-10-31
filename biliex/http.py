@@ -12,6 +12,7 @@
 from __future__ import annotations
 
 import json
+import os
 import time
 import urllib.error
 import urllib.parse
@@ -88,6 +89,73 @@ class Cookie:
     __str__ = __repr__
 
 
+_BUVID_FILE = "buvid.json"
+_buvid_cache: dict[str, str] | None = None
+
+
+def _load_buvid() -> dict[str, str]:
+    """从缓存读 buvid3/buvid4；读不到返回空 dict。"""
+    global _buvid_cache
+    if _buvid_cache is not None:
+        return _buvid_cache
+    _buvid_cache = {}
+    try:
+        data = json.loads((config.config_dir() / _BUVID_FILE).read_text("utf-8"))
+    except (OSError, ValueError):
+        return _buvid_cache
+    if data.get("buvid3") and data.get("buvid4"):
+        _buvid_cache = {"buvid3": data["buvid3"], "buvid4": data["buvid4"]}
+    return _buvid_cache
+
+
+def _fetch_buvid() -> dict[str, str]:
+    """匿名取一对 buvid 并缓存。
+
+    实测：机房 IP / 新 IP 上不带 buvid 时 `view` 直接返回 HTTP 412（风控），
+    带上后 200。buvid 是**设备标识**，与账号无关，所以匿名取即可 —— 它不进
+    凭据文件（那里只放登录态），单独缓存成 buvid.json。
+    """
+    url = "https://api.bilibili.com/x/frontend/finger/spi"
+    request = urllib.request.Request(
+        url,
+        headers={
+            "User-Agent": config.USER_AGENT,
+            "Referer": config.REFERER,
+            "Accept": "application/json, text/plain, */*",
+        },
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=10) as response:
+            payload = json.loads(response.read().decode("utf-8", errors="replace"))
+    except (urllib.error.URLError, json.JSONDecodeError, OSError):
+        return {}
+    data = payload.get("data") or {}
+    buvid3, buvid4 = data.get("b_3", ""), data.get("b_4", "")
+    if not (buvid3 and buvid4):
+        return {}
+    out = {"buvid3": buvid3, "buvid4": buvid4}
+    try:
+        path = config.config_dir() / _BUVID_FILE
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps(out), "utf-8")
+        os.chmod(path, 0o600)
+    except OSError:
+        pass
+    return out
+
+
+def ensure_buvid(cookie: Cookie | None) -> Cookie | None:
+    """确保请求带上 buvid3/buvid4。取不到就原样返回 —— 不阻断请求。"""
+    if cookie is None or cookie.buvid3:
+        return cookie
+    data = _load_buvid() or _fetch_buvid()
+    if not data:
+        return cookie
+    cookie.buvid3 = data["buvid3"]
+    cookie.extra.setdefault("buvid4", data["buvid4"])
+    return cookie
+
+
 def _default_headers(cookie: Cookie | None) -> dict[str, str]:
     headers = {
         "User-Agent": config.USER_AGENT,
@@ -146,6 +214,8 @@ def request_payload(
     """
     query = urllib.parse.urlencode(params or {})
     full_url = f"{url}?{query}" if query else url
+    if url.startswith("https://api.bilibili.com/"):
+        cookie = ensure_buvid(cookie)
     last_error: BiliexError | None = None
 
     for attempt in range(1, retry.max_attempts + 1):
